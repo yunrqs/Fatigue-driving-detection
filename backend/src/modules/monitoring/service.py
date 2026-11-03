@@ -10,7 +10,9 @@ from dataclasses import asdict
 import cv2
 import numpy as np
 
-from backend.src.config.paths import DEFAULT_EMOTION_MODEL, DEFAULT_FACE_PREDICTOR
+from backend.src.config.model_assets import resolve_face_predictor
+from backend.src.config.paths import DEFAULT_EMOTION_MODEL
+from backend.src.mind_wandering.fusion import AttentionEngine, FrameSample
 
 # 情绪 -> 疲劳 的映射规则参数（与 BodyRecognitionConfig 相互独立的融合参数）。
 # 情绪：FER-2013 七类中没有"困倦"，为每种情绪设定对疲劳的贡献权重，用加权分
@@ -39,6 +41,8 @@ class AnalysisSession:
         self.frames = 0
         self.face_frames = 0
         self._emotion_drowsy_start = None
+        # 走神/专注融合引擎：持有窗口缓冲、个体基线与状态机，必须按会话重置。
+        self.attention = AttentionEngine()
 
     @property
     def ready(self) -> bool:
@@ -56,19 +60,21 @@ class AnalysisSession:
             from backend.src.algorithms.blink_detection.config import BlinkConfig
             from backend.src.algorithms.emotion.use_model import EmotionRecognizer
             from backend.src.algorithms.bodyrecognition.fatigue_detector import FatigueDetector
+            from backend.src.algorithms.bodyrecognition.config import BodyRecognitionConfig
 
             model = DEFAULT_EMOTION_MODEL
             if not model.is_file():
                 raise FileNotFoundError(f"情绪模型不存在：{model}")
-            if not DEFAULT_FACE_PREDICTOR.is_file():
-                raise FileNotFoundError(f"dlib 关键点模型不存在：{DEFAULT_FACE_PREDICTOR}")
+            # dlib 关键点模型（OpenFace 疲劳检测依赖）不在版本库中，缺失时这里会自动
+            # 下载并解压到 backend/models/dlib/，网络不可用则抛出带修复指引的错误。
+            predictor_path = resolve_face_predictor()
             # 两个模型都成功后再更新会话，加载失败时释放已经创建的资源。
             detector = BlinkDetector(BlinkConfig(mode="robust"))
             try:
                 # 旧模块的 Unicode 输出在部分 Windows 控制台会报编码错误。
                 with contextlib.redirect_stdout(io.StringIO()):
                     recognizer = EmotionRecognizer(str(model))
-                fatigue = FatigueDetector()
+                fatigue = FatigueDetector(BodyRecognitionConfig(predictor_path=str(predictor_path)))
             except Exception:
                 detector.close()
                 raise
@@ -100,6 +106,7 @@ class AnalysisSession:
             self.frames = 0
             self.face_frames = 0
             self._emotion_drowsy_start = None
+            self.attention.reset()
 
     def analyze(self, frame: np.ndarray) -> dict:
         with self.lock:
@@ -123,6 +130,20 @@ class AnalysisSession:
                 self.face_frames += 1
             elapsed = max(time.monotonic() - self.started_at, 1.0)
             fatigue_flags = self._combine_fatigue(blink, fatigue, probabilities)
+            # 三路信号以同一时间戳进入融合层，保证窗口对齐不依赖帧序号。
+            now = time.monotonic()
+            self.attention.feed(FrameSample(
+                t=now,
+                face=bool(blink.face_detected),
+                ear=blink.ear,
+                threshold=blink.threshold,
+                eye_closed=blink.state == "CLOSED",
+                blink=bool(blink.blink_detected),
+                emotion=emotion,
+                confidence=confidence,
+                probs=dict(probabilities) if probabilities else {},
+            ))
+            attention = self.attention.latest
             return {
                 "frame_width": int(frame.shape[1]),
                 "frame_height": int(frame.shape[0]),
@@ -152,6 +173,9 @@ class AnalysisSession:
                 "emotion_drowsy": fatigue_flags["emotion_drowsy"],
                 "gaze_drowsy": fatigue_flags["gaze_drowsy"],
                 "pose": asdict(fatigue.pose) if fatigue.pose is not None else None,
+                # ---- 融合层新增，不改变以上既有字段的语义 ----
+                "attention": attention.as_dict() if attention is not None else None,
+                "attention_calibration": self.attention.calibration_progress(now),
             }
 
     def _combine_fatigue(self, blink, fatigue, emotion_probabilities) -> dict:

@@ -41,7 +41,7 @@ MWDET 数据训练 `focused / not_focused` 二分类器，并保留 PAFE 视频�
 │   │   ├── routes/index.py         # API 路由注册
 │   │   ├── app.py                  # 生命周期与静态页面托管
 │   │   └── server.py               # 服务入口
-│   ├── models/emotion/             # 模型权重
+│   ├── models/emotion/             # 情绪权重（dlib 关键点模型缺失时自动下载）
 │   ├── outputs/                    # 实验结果、模型和训练图
 │   ├── tests/unit/                 # 眨眼单元测试
 │   ├── tests/integration/          # HTTP 契约测试
@@ -104,7 +104,7 @@ weighted-F1、逐类指标和混淆矩阵。
 ### Windows 一键安装与启动
 
 其他电脑先安装 **64 位 Python 3.10+（建议 3.11，勾选 Add Python to PATH）** 和
-**Node.js 22.12+（包含 npm）**，然后完整解压项目。
+**Node.js 20.19+ 或 22.12+（包含 npm）**，然后完整解压项目。
 
 1. 双击根目录 `setup.cmd`，自动创建隔离环境 `backend/.venv` 并安装后端、前端依赖。
 2. 安装成功后双击 `start.cmd`，浏览器会自动打开 http://127.0.0.1:5173 。
@@ -117,7 +117,15 @@ weighted-F1、逐类指标和混淆矩阵。
 **分发时必须包含 `backend/models/emotion/fer2013_best_model.pth` 和整个
 `web-react/public/mediapipe/` 目录。** 模型权重被 `.gitignore` 排除，通过 Git 下载源码时需另行提供。
 不要打包或复制 `.venv`、`node_modules`，它们由脚本在目标电脑生成。
+
+`backend/models/dlib/shape_predictor_68_face_landmarks.dat`（dlib 68 点关键点，约 95 MB）
+同样不在版本库中，无需手动准备：`setup.cmd` 会提前下载，点“开始识别”时若仍缺失也会自动补全并解压。
+离线环境可自行下载后放入该路径，或用环境变量 `FOCUSLENS_FACE_PREDICTOR` 指向已有副本
+（见 `backend/src/config/model_assets.py`）。
 首次开启识别时，较新的 MediaPipe 还可能联网下载 Face Landmarker 模型。
+
+上半身肢体动作（OpenPose `body_pose_model.pth`，约 200 MB）属于可选增强，官方只提供网盘下载，
+脚本不会自动获取；该文件缺失时疲劳检测自动降级为“打哈欠 + 头部姿态”，眨眼、情绪与专注融合不受影响。
 一键安装面向网页监测；离线训练、开发测试的额外依赖见下面的开发文档。
 
 参见 [开发与测试](docs/development.md)，前端依赖在 web-react，后端依赖在 backend。

@@ -1,5 +1,6 @@
 import type { AnalysisResult, ChartPoint, Emotion } from '../types';
 import EarChart from './EarChart';
+import AttentionPanel from './AttentionPanel';
 import FatiguePanel from '../../bodyrecognition/components/FatiguePanel';
 
 const emotionMeta: Record<Emotion, [string, string]> = {
@@ -83,13 +84,6 @@ export default function ResultPanels({ result, history, gazeDrowsy = false }: Pr
             <span>{meta?.[0] || (result ? '请保持面部位于画面中央' : '开启识别后显示结果')}</span>
           </div>
         </div>
-        <div className="notice-card">
-          <span className="notice-mark">i</span>
-          <p>
-            <strong>走神分类暂未接入</strong>
-            当前仅展示情绪与眨眼结果，暂不判断走神状态。
-          </p>
-        </div>
       </article>
 
       <article className="panel blink-panel">
@@ -134,6 +128,8 @@ export default function ResultPanels({ result, history, gazeDrowsy = false }: Pr
       </article>
 
       <FatiguePanel status={result} />
+
+      <AttentionPanel result={result} />
     </>
   );
 }

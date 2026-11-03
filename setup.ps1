@@ -23,7 +23,12 @@ function Test-Python {
 }
 
 function Test-BackendImports {
+    # Two stages so an error tells you whether the server stack or the data pipeline is broken.
+    # The second stage imports mind_wandering.training.train, which pulls pandas / sklearn /
+    # joblib / matplotlib at module level. That module has no import-time side effects.
     & $pythonExe -c 'import fastapi, uvicorn, python_multipart, numpy, cv2, torch, torchvision, mediapipe; import backend.src.app' | Out-Host
+    if ($LASTEXITCODE -ne 0) { return $false }
+    & $pythonExe -c 'import pandas, sklearn, joblib, tqdm, matplotlib; import backend.src.mind_wandering.training.train' | Out-Host
     return $LASTEXITCODE -eq 0
 }
 
@@ -41,9 +46,13 @@ try {
         $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
         $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
         if (-not $nodeCommand -or -not $npmCommand) {
-            throw 'Node.js and npm were not found. Install Node.js 22.12+ (with npm), then reopen this script.'
+            throw 'Node.js and npm were not found. Install Node.js 20.19+ or 22.12+ (with npm), then reopen this script.'
         }
-        Invoke-Checked $nodeCommand.Source @('-e', 'const v=process.versions.node.split(''.'').map(Number); process.exit(v[0]>22 || (v[0]===22 && v[1]>=12) ? 0 : 1)')
+        # Match Vite's own engines range (^20.19.0 || >=22.12.0) instead of requiring 22.12+.
+        & $nodeCommand.Source -e 'const v=process.versions.node.split(''.'').map(Number); process.exit(v[0]>22 || (v[0]===22 && v[1]>=12) || (v[0]===20 && v[1]>=19) ? 0 : 1)'
+        if ($LASTEXITCODE -ne 0) {
+            throw "Node.js $(& $nodeCommand.Source --version) is not supported. Install Node.js 20.19+ or 22.12+ (with npm), then reopen this script."
+        }
         foreach ($file in @('web-react\package.json', 'web-react\package-lock.json', 'web-react\public\mediapipe\face_mesh\face_mesh.js')) {
             if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $file) -PathType Leaf)) {
                 throw "Required frontend file is missing: $file. Extract the complete project."
@@ -81,23 +90,38 @@ try {
         Invoke-Checked $basePython ($prefix + @('-m', 'venv', $venvDir))
     }
 
-    $pythonVersion = & $pythonExe --version
+    $pythonVersion = (& $pythonExe --version 2>&1 | Out-String).Trim()
     $backendStamp = Join-Path $venvDir '.focuslens-requirements.txt'
-    $backendKey = "$PSScriptRoot|$pythonVersion|$((Get-FileHash -LiteralPath $requirements -Algorithm SHA256).Hash)"
+    # Compare dependency content, not the project path: moving the checkout does not invalidate the venv.
+    $backendKey = "$pythonVersion|$((Get-FileHash -LiteralPath $requirements -Algorithm SHA256).Hash)"
     $backendCurrent = (Test-Path -LiteralPath $backendStamp) -and ((Get-Content -LiteralPath $backendStamp -Raw).Trim() -eq $backendKey)
     $installBackend = $Reinstall -or -not $backendCurrent
-    if (-not $installBackend) { $installBackend = -not (Test-BackendImports) }
     if ($installBackend) {
-        # Invalidate first: an interrupted installation must be retried next time.
-        Set-Content -LiteralPath $backendStamp -Value '' -Encoding UTF8
+        # Delete the stamp instead of writing an empty string: an empty write leaves only a BOM,
+        # which makes "did the install finish" ambiguous. A missing file is an unambiguous signal.
+        Remove-Item -LiteralPath $backendStamp -Force -ErrorAction SilentlyContinue
         Write-Host '[2/3] Installing backend dependencies. The first download may take several minutes.'
-        Invoke-Checked $pythonExe @('-m', 'ensurepip', '--upgrade')
-        Invoke-Checked $pythonExe @('-m', 'pip', 'install', '--upgrade', 'pip')
-        Invoke-Checked $pythonExe @('-m', 'pip', 'install', '-r', $requirements)
-        if (-not (Test-BackendImports)) { throw 'Backend dependency validation failed. See the import error above.' }
+        & $pythonExe -m pip --version *> $null
+        if ($LASTEXITCODE -ne 0) { Invoke-Checked $pythonExe @('-m', 'ensurepip', '--upgrade') }
+        # --retries/--timeout let flaky connections recover instead of starting the whole install over.
+        Invoke-Checked $pythonExe @('-m', 'pip', 'install', '--retries', '5', '--timeout', '60', '-r', $requirements)
+        if (-not (Test-BackendImports)) {
+            # mediapipe's matplotlib import can fail transiently; retry once before giving up.
+            Write-Host 'Backend import check failed once, retrying...'
+            if (-not (Test-BackendImports)) { throw 'Backend dependency validation failed. See the import error above.' }
+        }
         Set-Content -LiteralPath $backendStamp -Value $backendKey -Encoding UTF8
     } else {
         Write-Host '[2/3] Backend dependencies are ready.'
+    }
+
+    # backend/models/ is git-ignored, so a fresh clone has no dlib landmark model.
+    # Fetch it here instead of at "start" time, where a 100 MB download would look like a hang.
+    # Failure is not fatal: the app retries the download when the session starts.
+    Write-Host 'Checking model assets: dlib 68-point landmark predictor.'
+    & $pythonExe -c "from backend.src.config.model_assets import resolve_face_predictor; print('Ready:', resolve_face_predictor())" | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'Warning: the dlib landmark model could not be prepared. Clicking Start will retry the download.' -ForegroundColor Yellow
     }
 
     if (-not $BackendOnly) {
@@ -106,11 +130,12 @@ try {
         $nodeVersion = & $nodeCommand.Source --version
         $packageHash = (Get-FileHash -LiteralPath (Join-Path $frontendDir 'package.json') -Algorithm SHA256).Hash
         $lockHash = (Get-FileHash -LiteralPath (Join-Path $frontendDir 'package-lock.json') -Algorithm SHA256).Hash
-        $frontendKey = "$PSScriptRoot|$nodeVersion|$packageHash|$lockHash"
+        $frontendKey = "$nodeVersion|$packageHash|$lockHash"
         $frontendCurrent = (Test-Path -LiteralPath $frontendStamp) -and ((Get-Content -LiteralPath $frontendStamp -Raw).Trim() -eq $frontendKey)
         if ($Reinstall -or -not $frontendCurrent -or -not (Test-Path -LiteralPath (Join-Path $frontendDir 'node_modules\.bin\vite.cmd'))) {
             Write-Host '[3/3] Installing frontend dependencies.'
-            if (Test-Path -LiteralPath $frontendStamp) { Set-Content -LiteralPath $frontendStamp -Value '' -Encoding UTF8 }
+            # Same convention as the backend stamp: absence of the file marks an interrupted install.
+            Remove-Item -LiteralPath $frontendStamp -Force -ErrorAction SilentlyContinue
             Invoke-Checked $npmCommand.Source @('--prefix', $frontendDir, 'ci', '--include=dev', '--no-audit', '--no-fund')
             Set-Content -LiteralPath $frontendStamp -Value $frontendKey -Encoding UTF8
         } else {

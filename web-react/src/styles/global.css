@@ -174,7 +174,7 @@ h1 { margin: 0; font-size: clamp(25px, 2.5vw, 36px); font-weight: 700; letter-sp
   margin: auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-areas: "camera camera" "fatigue emotion" "blink gaze";
+  grid-template-areas: "camera camera" "fatigue emotion" "blink gaze" "attention attention";
   gap: 18px;
 }
 .panel {
@@ -190,6 +190,7 @@ h1 { margin: 0; font-size: clamp(25px, 2.5vw, 36px); font-weight: 700; letter-sp
 .blink-panel { grid-area: blink; }
 .gaze-panel { grid-area: gaze; }
 .fatigue-panel { grid-area: fatigue; }
+.attention-panel { grid-area: attention; }
 .fatigue-panel .pose-heading {
   margin-top: 20px;
   padding-top: 18px;
@@ -292,12 +293,32 @@ h1 { margin: 0; font-size: clamp(25px, 2.5vw, 36px); font-weight: 700; letter-sp
 .emotion-focus p { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
 .emotion-focus h3 { margin: 0; font-size: 26px; text-transform: capitalize; }
 .emotion-focus > div:last-child > span { display: block; margin-top: 8px; color: var(--muted); font-size: 13px; }
-.notice-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid #234e71; border-radius: 11px; background: rgba(28, 71, 106, .18); }
-.notice-mark { width: 23px; height: 23px; flex-shrink: 0; display: grid; place-items: center; color: var(--blue); border: 1px solid var(--blue); border-radius: 50%; font-family: Georgia, serif; }
-.notice-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
-.notice-card strong { display: block; margin-bottom: 4px; color: var(--text); font-size: 13px; }
-.notice-card.drowsy { border-color: var(--danger); background: rgba(255, 129, 145, .12); }
-.notice-card.drowsy .notice-mark { color: var(--danger); border-color: var(--danger); }
+
+/* 5.1 注意力融合：三态用青/蓝/琥珀区分，不用 --danger，红色只留给疲劳。 */
+.attention-verdict { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.attention-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+}
+.attention-state::before { content: ''; width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
+.attention-state.is-focused { color: var(--cyan); border-color: #32897f; background: var(--cyan-soft); }
+.attention-state.is-deliberate { color: var(--blue); border-color: #356b9c; background: rgba(91, 168, 255, .12); }
+.attention-state.is-spontaneous { color: var(--amber); border-color: #a8723a; background: rgba(255, 189, 104, .12); }
+.attention-state.is-inconclusive { color: var(--muted); border-color: #345168; background: rgba(143, 170, 194, .1); }
+.attention-level { padding: 6px 12px; border: 1px solid #29495e; border-radius: 99px; color: var(--text); font-size: 12px; }
+.attention-level-note { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.attention-hint { margin: 0 0 14px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.attention-reason { margin: 14px 0 0; padding: 12px 14px; border-left: 2px solid var(--blue); border-radius: 0 8px 8px 0; background: rgba(18, 42, 60, .45); font-size: 13px; line-height: 1.8; }
+.attention-progress { height: 8px; overflow: hidden; border-radius: 99px; background: #16334a; }
+.attention-progress i { display: block; width: 100%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--blue)); transform-origin: left center; transition: transform .3s ease; }
+.attention-meta { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; color: var(--muted); font-size: 12px; }
 
 /* 6. 眨眼结果：六项指标分成三列两行，下面是曲线 */
 .blink-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -350,7 +371,7 @@ h1 { margin: 0; font-size: clamp(25px, 2.5vw, 36px); font-weight: 700; letter-sp
   .top-status { flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 }
 @media (max-width: 1000px) {
-  .dashboard { grid-template-columns: minmax(0, 1fr); grid-template-areas: "camera" "fatigue" "emotion" "blink" "gaze"; }
+  .dashboard { grid-template-columns: minmax(0, 1fr); grid-template-areas: "camera" "fatigue" "emotion" "blink" "gaze" "attention"; }
   .topbar { align-items: flex-start; flex-direction: column; gap: 16px; }
   .state-panel { min-height: 320px; }
 }
@@ -436,15 +457,16 @@ h1 { margin: 0; font-size: clamp(25px, 2.5vw, 36px); font-weight: 700; letter-sp
 /* 数据视图：隐藏摄像头面板和侧边栏，显示结果面板（疲劳判定在最上方整行）。 */
 .view-data .sidebar { display: none; }
 .view-data { grid-template-columns: minmax(0, 1fr); }
-.view-data .dashboard { grid-template-areas: "verdict verdict" "fatigue emotion" "blink gaze"; }
+.view-data .dashboard { grid-template-areas: "verdict verdict" "fatigue emotion" "blink gaze" "attention attention"; }
 .view-data .camera-panel { display: none; }
 .view-data .verdict-panel,
 .view-data .blink-panel,
 .view-data .gaze-panel,
-.view-data .fatigue-panel { display: block; }
+.view-data .fatigue-panel,
+.view-data .attention-panel { display: block; }
 .view-data .state-panel { display: flex; }
 @media (max-width: 1000px) {
-  .view-data .dashboard { grid-template-areas: "verdict" "fatigue" "emotion" "blink" "gaze"; }
+  .view-data .dashboard { grid-template-areas: "verdict" "fatigue" "emotion" "blink" "gaze" "attention"; }
 }
 
 /* 11. 疲劳判定：多信号融合的最终结果展示 */

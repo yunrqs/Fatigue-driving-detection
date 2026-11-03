@@ -11,3 +11,14 @@ torch>=2.1
 torchvision>=0.16
 # 现有 face_mesh.py 同时兼容旧 solutions 接口和新 tasks 接口。
 mediapipe>=0.10,<1.0
+# ---- 数据与模型训练：mind_wandering 的 dataset / features / training / inference ----
+# 这几项此前既没装也没声明，导致 mind_wandering 一 import 就 ImportError。
+# 显式声明而不是指望传递依赖：indirect 依赖随时可能被上游悄悄移走。
+pandas>=2.2,<3.0
+scikit-learn>=1.4,<2.0
+joblib>=1.3,<2.0
+# 情绪模型重训脚本（algorithms/emotion/train_model.py）需要进度条与绘图。
+tqdm>=4.66,<5.0
+matplotlib>=3.8,<4.0
+# train_with_fer2013.py 直接 import PIL 读图。
+pillow>=10.0

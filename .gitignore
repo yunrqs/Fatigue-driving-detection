@@ -18,3 +18,6 @@ data/processed/
 # Local editor settings and generated blink recordings
 **/.vscode/
 **/blink_log.csv
+
+# Local agent/workspace data (session memory, caches)
+.workbuddy/

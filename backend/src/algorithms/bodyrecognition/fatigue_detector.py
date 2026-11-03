@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Optional
 
@@ -18,6 +17,7 @@ from backend.src.algorithms.bodyrecognition.body_pose import BodyPoseDetector
 from backend.src.algorithms.bodyrecognition.config import BodyRecognitionConfig
 from backend.src.algorithms.bodyrecognition.landmarks import head_pose, mouth_aspect_ratio
 from backend.src.algorithms.bodyrecognition.types import FatigueResult
+from backend.src.config.model_assets import resolve_face_predictor
 
 
 class FatigueDetector:
@@ -29,20 +29,38 @@ class FatigueDetector:
 
     def __init__(self, config: Optional[BodyRecognitionConfig] = None):
         self.config = config if config is not None else BodyRecognitionConfig()
-        if not os.path.isfile(self.config.predictor_path):
-            raise FileNotFoundError(
-                f"dlib 关键点模型不存在：{self.config.predictor_path}")
+        # 模型可能不在版本库里（backend/models/ 被 .gitignore 忽略），
+        # 这里统一走解析器：本地命中即用，缺失时自动下载，失败时给出可操作提示。
+        self.predictor_path = resolve_face_predictor(self.config.predictor_path)
         self.detector = dlib.get_frontal_face_detector()
-        self.predictor = dlib.shape_predictor(self.config.predictor_path)
+        try:
+            self.predictor = dlib.shape_predictor(str(self.predictor_path))
+        except RuntimeError as exc:  # dlib 读取损坏/不兼容的 .dat 时抛 RuntimeError
+            raise RuntimeError(
+                f"dlib 关键点模型无法加载（文件可能已损坏）：{self.predictor_path}。"
+                f"删除该文件后重新启动即可自动重新下载。原始错误：{exc}"
+            ) from exc
         self._yawn_start: Optional[float] = None
         self._lean_start: Optional[float] = None
         self._pose: Optional[BodyPoseDetector] = None
+        # 上半身肢体动作是“可选增强”：OpenPose 权重约 200 MB，没有可靠的直链，
+        # 无法像 dlib 模型那样自动补全。缺失时降级为“打哈欠 + 头部姿态”，
+        # 不能让整条识别链路（眨眼 / 情绪 / 专注融合）因为一个可选项而起不来。
+        self.pose_available = False
+        self.pose_disabled_reason: Optional[str] = None
         if self.config.pose_enabled:
-            self._pose = BodyPoseDetector(
-                model_path=self.config.pose_model_path,
-                interval=self.config.pose_interval,
-                device=self.config.pose_device,
-            )
+            try:
+                self._pose = BodyPoseDetector(
+                    model_path=self.config.pose_model_path,
+                    interval=self.config.pose_interval,
+                    device=self.config.pose_device,
+                )
+                self.pose_available = True
+            except (FileNotFoundError, RuntimeError, OSError) as exc:
+                self.pose_disabled_reason = str(exc)
+                print(
+                    f"[warn] 上半身肢体动作检测已停用，仅使用打哈欠与头部姿态：{exc}"
+                )
 
     def process_frame(self, frame) -> FatigueResult:
         """输入一帧 BGR 图像，返回 :class:`FatigueResult`。"""
