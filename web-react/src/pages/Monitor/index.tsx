@@ -3,17 +3,29 @@ import * as api from '../../features/monitoring/api';
 import { captureVideo, playCamera, toJpeg } from '../../features/monitoring/camera';
 import Sidebar from '../../features/monitoring/components/Sidebar';
 import ResultPanels from '../../features/monitoring/components/ResultPanels';
+import DriverHud from '../../features/monitoring/components/DriverHud';
+import TripSummaryModal from '../../features/monitoring/components/TripSummaryModal';
 import Icon from '../../components/Icon';
-import type { AnalysisResult, ChartPoint } from '../../features/monitoring/types';
+import type {
+  AnalysisResult, ChartPoint, DriverEvent, Emotion, FatigueAssessment, FatigueLevel,
+  Sensitivity, TripSummary,
+} from '../../features/monitoring/types';
+import { assessFatigue, SENSITIVITY_CONFIG } from '../../features/monitoring/fatigueScoring';
+import { playAlarm, playChime, primeAudio, speak } from '../../features/monitoring/alerts';
 import GazePanel from '../../features/gaze/components/GazePanel';
 import { useGazePrediction } from '../../features/gaze/hooks/useGazePrediction';
 import type { BodyPoseStatus } from '../../features/bodyrecognition/types';
 import type { GazePoint } from '../../features/gaze/types';
 
 // 屏幕中央注视区：视线落点在该矩形内视为「注视前方/看屏」，落到区域外（含屏幕外）
-// 并持续一段时间即视为视线疲劳。
+// 并持续一段时间即视为视线疲劳。判定时长由灵敏度档位决定（见 SENSITIVITY_CONFIG）。
 const GAZE_REGION = { xMin: 0.2, xMax: 0.8, yMin: 0.2, yMax: 0.8 };
-const GAZE_OUTSIDE_SECONDS = 3;
+
+// 情绪中文标签，供摄像头画面人脸框叠加显示（与 ResultPanels 的情绪映射一致）。
+const EMOTION_LABEL: Record<Emotion, string> = {
+  angry: '愤怒', disgust: '厌恶', fear: '恐惧', happy: '愉悦',
+  sad: '悲伤', surprise: '惊讶', neutral: '中性',
+};
 
 function inGazeRegion(point: GazePoint | null): boolean {
   if (!point || !point.inViewport) return false;
@@ -94,6 +106,8 @@ function drawPoseKeypoints(context: CanvasRenderingContext2D, pose: BodyPoseStat
   }
 }
 
+const LEVEL_RANK: Record<FatigueLevel, number> = { none: 0, mild: 1, moderate: 2, severe: 3 };
+
 export default function App() {
   // useState 保存需要显示到页面的数据；useRef 保存视频、媒体流和请求等对象。
   const [cameraOn, setCameraOn] = useState(false);
@@ -114,6 +128,15 @@ export default function App() {
   // 视图切换：摄像头页放实时画面与控制，数据页放结果面板。视频元素始终挂载，切换不影响采集与分析。
   const [view, setView] = useState<'camera' | 'data'>('camera');
 
+  // —— 驾驶辅助（真实驾驶场景）相关状态 ——
+  const [muted, setMuted] = useState(false);
+  const [nightMode, setNightMode] = useState(false);
+  const [sensitivity, setSensitivity] = useState<Sensitivity>('standard');
+  const [fatigueAssessment, setFatigueAssessment] = useState<FatigueAssessment | null>(null);
+  const [driveSeconds, setDriveSeconds] = useState(0);
+  const [events, setEvents] = useState<DriverEvent[]>([]);
+  const [tripSummary, setTripSummary] = useState<TripSummary | null>(null);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const gaze = useGazePrediction(videoRef, cameraOn);
   const [gazeDrowsy, setGazeDrowsy] = useState(false);
@@ -126,23 +149,95 @@ export default function App() {
   // 每次停止时更新编号，旧请求返回后发现编号不同，就不再更新页面。
   const runIdRef = useRef(0);
 
+  // 帧循环里读这些值用 ref（避免旧闭包读到过期的 state）：gazeDrowsy 由独立 effect 维护、
+  // sensitivity / muted 由用户在侧栏切换，都不可能通过调整帧循环依赖来可靠同步。
+  const gazeDrowsyRef = useRef(false);
+  const mutedRef = useRef(false);
+  const sensitivityRef = useRef<Sensitivity>('standard');
+  const fatigueSinceRef = useRef<number | null>(null);
+  const lastFatigueLevelRef = useRef<FatigueLevel>('none');
+  const lastAttentionStateRef = useRef<'deliberate_mw' | 'spontaneous_mw' | null>(null);
+  const tripStartedAtRef = useRef<number | null>(null);
+  const eventIdRef = useRef(0);
+
+  useEffect(() => { mutedRef.current = muted; }, [muted]);
+  useEffect(() => { sensitivityRef.current = sensitivity; }, [sensitivity]);
+
   // 视线疲劳：视线落点持续位于「屏幕中央注视区」之外（含屏幕外）达到时长阈值后置位。
   useEffect(() => {
     const point = gaze.frame.point;
     const active = gaze.status === 'running' && gaze.calibrated;
+    const thresholdSeconds = SENSITIVITY_CONFIG[sensitivity].gazeOutsideSeconds;
     if (!active || !point) {
       gazeOutsideSinceRef.current = null;
+      gazeDrowsyRef.current = false;
       setGazeDrowsy(false);
       return;
     }
     if (!inGazeRegion(point)) {
       if (gazeOutsideSinceRef.current === null) gazeOutsideSinceRef.current = performance.now();
-      setGazeDrowsy(performance.now() - gazeOutsideSinceRef.current >= GAZE_OUTSIDE_SECONDS * 1000);
+      const drowsy = performance.now() - gazeOutsideSinceRef.current >= thresholdSeconds * 1000;
+      gazeDrowsyRef.current = drowsy;
+      setGazeDrowsy(drowsy);
     } else {
       gazeOutsideSinceRef.current = null;
+      gazeDrowsyRef.current = false;
       setGazeDrowsy(false);
     }
-  }, [gaze.frame.point, gaze.calibrated, gaze.status]);
+  }, [gaze.frame.point, gaze.calibrated, gaze.status, sensitivity]);
+
+  // 连续驾驶时长：以一次行程开始时刻为起点每秒推进，结束监测或重置统计时清零。
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (tripStartedAtRef.current != null) {
+        setDriveSeconds(Math.floor((Date.now() - tripStartedAtRef.current) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  function addEvent(kind: DriverEvent['kind'], label: string) {
+    const entry: DriverEvent = {
+      id: ++eventIdRef.current,
+      time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      kind,
+      label,
+    };
+    setEvents((previous) => [entry, ...previous].slice(0, 100));
+  }
+
+  // 疲劳等级跃迁 / 走神触发时记录事件并声光提醒；用 ref 去重，避免每帧重复播报。
+  useEffect(() => {
+    const level = fatigueAssessment?.level ?? 'none';
+    if (level !== lastFatigueLevelRef.current) {
+      if (level !== 'none') {
+        const label = level === 'severe' ? '重度疲劳' : level === 'moderate' ? '中度疲劳' : '轻度疲劳';
+        addEvent(level as DriverEvent['kind'], label);
+        if (!mutedRef.current) {
+          if (level === 'severe') {
+            playAlarm();
+            speak('检测到疲劳驾驶，请立即靠边停车休息');
+          } else if (level === 'moderate') {
+            playChime();
+            speak('请注意休息，保持专注');
+          } else {
+            playChime();
+          }
+        }
+      }
+      lastFatigueLevelRef.current = level;
+    }
+    const attention = result?.attention?.state;
+    if (attention === 'deliberate_mw' || attention === 'spontaneous_mw') {
+      if (lastAttentionStateRef.current !== attention) {
+        addEvent('distract', '注意力分散');
+        if (!mutedRef.current) playChime();
+        lastAttentionStateRef.current = attention;
+      }
+    } else {
+      lastAttentionStateRef.current = null;
+    }
+  }, [fatigueAssessment, result]);
 
   function notify(message: string, error = false) {
     if (!mountedRef.current) return;
@@ -230,6 +325,8 @@ export default function App() {
   async function startAnalysis() {
     if (!streamRef.current || analyzing || modelLoading || resetting) return;
     const runId = runIdRef.current;
+    // 在用户手势内激活音频上下文，否则疲劳告警音会被浏览器静音策略拦截。
+    primeAudio();
     setModelLoading(true);
     try {
       // 先等暂停前的请求结束，确保服务器不会同时处理两帧。
@@ -238,6 +335,8 @@ export default function App() {
       if (!mountedRef.current || runId !== runIdRef.current || !streamRef.current) return;
       setService({ online: true, text: '识别服务就绪' });
       setAnalyzing(true);
+      // 首次开始识别视为一次行程的起点；暂停后继续不重置时长。
+      if (tripStartedAtRef.current == null) tripStartedAtRef.current = Date.now();
       notify('情绪识别与眨眼检测已启动。');
     } catch (error) {
       if (runId === runIdRef.current) notify(errorMessage(error), true);
@@ -265,6 +364,20 @@ export default function App() {
         if (cancelled || runId !== runIdRef.current) return;
         setResult({ ...nextResult, pose: alignPoseSides(nextResult.pose) });
         setHistory((previous) => [...previous, { ear: nextResult.ear, threshold: nextResult.threshold }].slice(-80));
+
+        // 疲劳评估：结合视线判定与持续时长，得出评分与分级。
+        const fatiguedNow = nextResult.is_fatigued || gazeDrowsyRef.current;
+        const nowMs = performance.now();
+        if (fatiguedNow) {
+          if (fatigueSinceRef.current == null) fatigueSinceRef.current = nowMs;
+        } else {
+          fatigueSinceRef.current = null;
+        }
+        const fatigueSeconds = fatiguedNow && fatigueSinceRef.current != null
+          ? (nowMs - fatigueSinceRef.current) / 1000
+          : 0;
+        setFatigueAssessment(assessFatigue(nextResult, gazeDrowsyRef.current, fatigueSeconds, SENSITIVITY_CONFIG[sensitivityRef.current]));
+
         const completed = performance.now();
         frameTimes.push(completed - lastCompleted);
         lastCompleted = completed;
@@ -303,16 +416,40 @@ export default function App() {
       context.setLineDash([12, 7]);
       context.strokeRect(x, y, width, height);
       context.setLineDash([]);
-      context.fillStyle = 'rgba(7,16,29,.82)';
-      context.fillRect(x, Math.max(0, y - 22), 105, 19);
+
+      // 人脸框上方叠加情绪标签：情绪 + 置信度 + 睁/闭眼状态，与框绑定显示。
+      const emotionText = result.emotion ? EMOTION_LABEL[result.emotion] : '—';
+      const confText = result.emotion_confidence != null ? `${Math.round(result.emotion_confidence * 100)}%` : '';
+      const stateText = result.blink_detected ? '闭眼' : '睁眼';
+      const label = `${emotionText}${confText ? ` ${confText}` : ''} · ${stateText}`;
+
+      context.font = '12px "Microsoft YaHei", system-ui, sans-serif';
+      const textWidth = context.measureText(label).width;
+      const padX = 8;
+      const boxHeight = 21;
+      const labelX = x;
+      const labelY = Math.max(0, y - boxHeight - 4);
+      context.fillStyle = 'rgba(7,16,29,.85)';
+      context.fillRect(labelX, labelY, textWidth + padX * 2, boxHeight);
       context.fillStyle = color;
-      context.font = '10px ui-monospace, monospace';
-      context.fillText(result.blink_detected ? 'BLINK DETECTED' : 'FACE TRACKED', x + 7, Math.max(13, y - 9));
+      context.textBaseline = 'middle';
+      context.fillText(label, labelX + padX, labelY + boxHeight / 2 + 1);
+      context.textBaseline = 'alphabetic';
     }
     if (showPoseKeypoints && result.pose?.person_detected) {
       drawPoseKeypoints(context, result.pose);
     }
   }, [result, analyzing, cameraOn, showPoseKeypoints]);
+
+  function clearTripState() {
+    fatigueSinceRef.current = null;
+    lastFatigueLevelRef.current = 'none';
+    lastAttentionStateRef.current = null;
+    tripStartedAtRef.current = null;
+    setFatigueAssessment(null);
+    setDriveSeconds(0);
+    setEvents([]);
+  }
 
   async function resetStats() {
     if (resetting || modelLoading) return;
@@ -325,12 +462,32 @@ export default function App() {
       if (!mountedRef.current) return;
       setResult(null);
       setHistory([]);
+      clearTripState();
       notify('统计已重置，点击“开始识别”继续。');
     } catch (error) {
       notify(`重置失败：${errorMessage(error)}`, true);
     } finally {
       if (mountedRef.current) setResetting(false);
     }
+  }
+
+  function endTrip() {
+    const fatigueEvents = events.filter((event) => event.kind === 'mild' || event.kind === 'moderate' || event.kind === 'severe');
+    const maxLevel = fatigueEvents.reduce<FatigueLevel>((max, event) => {
+      const kind = event.kind as FatigueLevel;
+      return LEVEL_RANK[kind] > LEVEL_RANK[max] ? kind : max;
+    }, 'none');
+    const summary: TripSummary = {
+      startedAt: tripStartedAtRef.current
+        ? new Date(tripStartedAtRef.current).toLocaleTimeString('zh-CN', { hour12: false })
+        : '—',
+      endedAt: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      durationSeconds: driveSeconds,
+      fatigueEventCount: fatigueEvents.length,
+      maxLevel,
+    };
+    setTripSummary(summary);
+    void resetStats();
   }
 
   function saveCapture() {
@@ -355,23 +512,25 @@ export default function App() {
   }
 
   const fatigued = (result?.is_fatigued ?? false) || gazeDrowsy;
+  const attentionState = result?.attention?.state;
+  const distracted = attentionState === 'deliberate_mw' || attentionState === 'spontaneous_mw';
+  const faceDetected = analyzing && (result?.face_detected ?? false);
 
-  return <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}${view === 'data' ? ' view-data' : ''}`}>
+  return <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}${view === 'data' ? ' view-data' : ''}${nightMode ? ' night-mode' : ''}`}>
     <Sidebar cameraOn={cameraOn} cameraLoading={cameraLoading} modelLoading={modelLoading}
       gaze={gaze} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed(value => !value)}
       serviceOnline={service.online} serviceText={service.text}
       analyzing={analyzing} resetting={resetting} onCamera={toggleCamera} onStart={startAnalysis}
       onPause={pauseAnalysis} onReset={resetStats} onCapture={saveCapture}
-      showPoseKeypoints={showPoseKeypoints} onTogglePoseKeypoints={setShowPoseKeypoints} />
+      showPoseKeypoints={showPoseKeypoints} onTogglePoseKeypoints={setShowPoseKeypoints}
+      muted={muted} onToggleMuted={() => setMuted(value => !value)}
+      nightMode={nightMode} onToggleNightMode={() => setNightMode(value => !value)}
+      sensitivity={sensitivity} onSensitivityChange={setSensitivity}
+      onEndTrip={endTrip}
+      view={view} onViewChange={setView} />
     <main className="workspace">
       <header className="topbar">
         <div><p className="eyebrow">FOCUSLENS / 视觉状态实验台</p><h1>情绪与眨眼监测</h1></div>
-        <nav className="view-tabs" aria-label="视图切换">
-          <button type="button" className={view === 'camera' ? 'active' : ''} aria-current={view === 'camera' ? 'page' : undefined}
-            onClick={() => setView('camera')}>摄像头</button>
-          <button type="button" className={view === 'data' ? 'active' : ''} aria-current={view === 'data' ? 'page' : undefined}
-            onClick={() => setView('data')}>数据</button>
-        </nav>
         <div className="top-status">
           <span className={`status-pill ${service.online ? 'online' : 'offline'}`}><i />{service.text}</span>
           <time id="clock">{clock}</time>
@@ -392,16 +551,20 @@ export default function App() {
               <p>点击左侧「开启摄像头」开始采集</p>
             </div>
             <div className="frame-corners" aria-hidden="true"><i /><i /><i /><i /></div>
+            <DriverHud assessment={fatigueAssessment} distracted={distracted} faceDetected={faceDetected}
+              driveSeconds={driveSeconds} analyzing={analyzing} />
           </div>
           <div className="camera-footer">
             <span>分辨率 <b>{resolution}</b></span><span>分析 FPS <b>{fps}</b></span>
             <span>人脸状态 <b style={{ color: analyzing && result?.face_detected ? 'var(--cyan)' : undefined }}>{!analyzing ? '未检测' : result?.face_detected ? '已锁定' : '未检测'}</b></span>
           </div>
         </article>
-        <ResultPanels result={result} history={history} gazeDrowsy={gazeDrowsy} />
+        <ResultPanels result={result} history={history} gazeDrowsy={gazeDrowsy}
+          assessment={fatigueAssessment} events={events} driveSeconds={driveSeconds} />
         <GazePanel gaze={gaze} />
       </section>
       <p className={`toast${toast.message ? ' show' : ''}${toast.error ? ' error' : ''}`} role="status">{toast.message}</p>
+      {tripSummary && <TripSummaryModal summary={tripSummary} onClose={() => setTripSummary(null)} />}
     </main>
   </div>;
 }

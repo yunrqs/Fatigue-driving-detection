@@ -1,5 +1,5 @@
 interface Props {
-  name: 'camera' | 'play' | 'pause' | 'image' | 'reset' | 'shield' | 'chevron' | 'eye' | 'target' | 'fullscreen' | 'tools';
+  name: 'camera' | 'play' | 'pause' | 'image' | 'reset' | 'shield' | 'chevron' | 'eye' | 'target' | 'fullscreen' | 'tools' | 'chart';
 }
 
 // 所有图标使用相同尺寸和线条，颜色跟随按钮文字，不需要额外图标库。
@@ -25,5 +25,6 @@ export default function Icon({ name }: Props) {
     {name === 'target' && <><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2" /><path d="M12 2v4m0 12v4M2 12h4m12 0h4" /></>}
     {name === 'fullscreen' && <path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" />}
     {name === 'tools' && <path d="m14 6 4 4 4-4a7 7 0 0 1-9 9l-6 6a3 3 0 0 1-4-4l6-6a7 7 0 0 1 9-9Z" />}
+    {name === 'chart' && <><path d="M4 20h16" /><path d="M7 20v-6M12 20V8m5 12V12" /></>}
   </svg>;
 }

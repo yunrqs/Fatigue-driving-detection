@@ -1,6 +1,7 @@
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import Icon from '../../../components/Icon';
 import type { GazePrediction } from '../../gaze/hooks/useGazePrediction';
+import type { Sensitivity } from '../types';
 
 interface Props {
   cameraOn: boolean;
@@ -20,6 +21,15 @@ interface Props {
   onPause: () => void;
   onReset: () => void;
   onCapture: () => void;
+  muted: boolean;
+  onToggleMuted: () => void;
+  nightMode: boolean;
+  onToggleNightMode: () => void;
+  sensitivity: Sensitivity;
+  onSensitivityChange: (value: Sensitivity) => void;
+  onEndTrip: () => void;
+  view: 'camera' | 'data';
+  onViewChange: (view: 'camera' | 'data') => void;
 }
 
 function ControlGroup({ id, label, icon, children, className = '' }: {
@@ -46,6 +56,7 @@ function SideButton({ icon, children, className = '', ...props }: ComponentProps
 
 export default function Sidebar(props: Props) {
   const { gaze } = props;
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const cameraLabel = props.cameraLoading ? '正在开启摄像头' : props.cameraOn ? '关闭摄像头' : '开启摄像头';
   const analysisLabel = props.modelLoading ? '正在加载模型' : props.analyzing ? '识别运行中' : '开始识别';
   const gazeOn = gaze.status === 'running' || gaze.status === 'loading';
@@ -96,11 +107,54 @@ export default function Sidebar(props: Props) {
           <span className="button-label">显示肢体关键点</span>
         </label>
       </ControlGroup>
+      <ControlGroup id="driving-assist" label="驾驶辅助" icon="shield">
+        <label className="point-toggle" title="静音声音告警（提示音与语音）">
+          <input type="checkbox" checked={props.muted} aria-label="静音声音告警"
+            onChange={() => props.onToggleMuted()} />
+          <span className="button-label">静音声音告警</span>
+        </label>
+        <label className="point-toggle" title="夜间模式：降低整体亮度，减少驾驶时的屏幕眩光">
+          <input type="checkbox" checked={props.nightMode} aria-label="夜间模式"
+            onChange={() => props.onToggleNightMode()} />
+          <span className="button-label">夜间模式</span>
+        </label>
+        <div className="sensitivity-row" role="group" aria-label="告警灵敏度">
+          <span className="sensitivity-label">灵敏度</span>
+          {(['calm', 'standard', 'strict'] as const).map((level) => (
+            <button key={level} type="button"
+              className={`sensitivity-btn${props.sensitivity === level ? ' active' : ''}`}
+              aria-pressed={props.sensitivity === level}
+              onClick={() => props.onSensitivityChange(level)}>
+              {level === 'calm' ? '宽松' : level === 'standard' ? '标准' : '严格'}
+            </button>
+          ))}
+        </div>
+        <SideButton icon="reset" onClick={props.onEndTrip} aria-label="结束监测并查看行程总结" title="结束监测并查看行程总结">结束监测</SideButton>
+      </ControlGroup>
       <div className="privacy-note" title="本地处理：画面仅在本机分析，不保存视频。">
         <Icon name="shield" /><div><strong>本地处理</strong><p>画面仅在本机分析，不保存视频。</p></div>
       </div>
       </div>
       <ControlGroup id="tool-controls" label="工具" icon="tools" className="tools-group">
+        <button type="button" className="option-switch" role="switch" aria-checked={advancedOpen}
+          aria-label="高级选项" title="开启后可在摄像头画面与数据面板之间切换"
+          onClick={() => {
+            const next = !advancedOpen;
+            setAdvancedOpen(next);
+            if (!next) props.onViewChange('camera');
+          }}>
+          <span className="button-label">高级选项</span>
+          <span className="switch-track" aria-hidden="true" />
+          <span className="switch-status">{advancedOpen ? '已开启' : '已关闭'}</span>
+        </button>
+        {advancedOpen && <div className="view-switcher">
+          <SideButton icon="camera" className={props.view === 'camera' ? 'active' : ''}
+            aria-pressed={props.view === 'camera'} onClick={() => props.onViewChange('camera')}
+            aria-label="切换到摄像头画面" title="切换到摄像头画面">摄像头画面</SideButton>
+          <SideButton icon="chart" className={props.view === 'data' ? 'active' : ''}
+            aria-pressed={props.view === 'data'} onClick={() => props.onViewChange('data')}
+            aria-label="切换到数据面板" title="切换到数据面板">数据面板</SideButton>
+        </div>}
         <SideButton icon="image" onClick={props.onCapture} disabled={!props.cameraOn} aria-label="保存截图" title="保存截图">保存截图</SideButton>
         <SideButton icon="reset" onClick={props.onReset} disabled={props.resetting || props.modelLoading} aria-label="重置统计" title="重置统计">
           {props.resetting ? '正在重置' : '重置统计'}

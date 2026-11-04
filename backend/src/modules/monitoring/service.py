@@ -16,15 +16,15 @@ from backend.src.mind_wandering.fusion import AttentionEngine, FrameSample
 
 # 情绪 -> 疲劳 的映射规则参数（与 BodyRecognitionConfig 相互独立的融合参数）。
 # 情绪：FER-2013 七类中没有"困倦"，为每种情绪设定对疲劳的贡献权重，用加权分
-# 近似困倦程度——低落/呆滞类权重高，警觉/兴奋类权重低。
+# 近似困倦程度——低落/中性呆滞/强装愉悦类权重高，警觉/兴奋类权重低。
 EMOTION_FATIGUE_WEIGHTS = {
     "angry": 0.1,
     "disgust": 0.1,
     "fear": 0.0,
-    "happy": 0.0,
+    "happy": 0.7,
     "sad": 1.0,
     "surprise": 0.0,
-    "neutral": 0.25,
+    "neutral": 0.7,
 }
 EMOTION_DROWSY_SCORE_THRESHOLD = 0.5
 EMOTION_DROWSY_SECONDS = 3.0

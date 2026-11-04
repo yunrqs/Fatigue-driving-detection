@@ -1,4 +1,6 @@
-import type { AnalysisResult, ChartPoint, Emotion } from '../types';
+import { useState } from 'react';
+import type { AnalysisResult, ChartPoint, DriverEvent, Emotion, FatigueAssessment, FatigueLevel } from '../types';
+import { formatDuration } from '../fatigueScoring';
 import EarChart from './EarChart';
 import AttentionPanel from './AttentionPanel';
 import FatiguePanel from '../../bodyrecognition/components/FatiguePanel';
@@ -13,17 +15,34 @@ const emotionMeta: Record<Emotion, [string, string]> = {
   neutral: ['中性', '·'],
 };
 
+const LEVEL_LABEL: Record<FatigueLevel, string> = {
+  none: '正常',
+  mild: '轻度',
+  moderate: '中度',
+  severe: '重度',
+};
+
 function number(value: number | null | undefined, digits: number, fallback = '—'): string {
   return value != null && Number.isFinite(value) ? value.toFixed(digits) : fallback;
+}
+
+function scoreTier(score: number | null): 'low' | 'mid' | 'high' {
+  if (score == null) return 'low';
+  if (score >= 80) return 'high';
+  if (score >= 50) return 'mid';
+  return 'low';
 }
 
 interface Props {
   result: AnalysisResult | null;
   history: ChartPoint[];
   gazeDrowsy?: boolean;
+  assessment: FatigueAssessment | null;
+  events: DriverEvent[];
+  driveSeconds: number;
 }
 
-export default function ResultPanels({ result, history, gazeDrowsy = false }: Props) {
+export default function ResultPanels({ result, history, gazeDrowsy = false, assessment, events, driveSeconds }: Props) {
   const emotion = result?.emotion;
   const meta = emotion ? emotionMeta[emotion] : null;
 
@@ -39,6 +58,13 @@ export default function ResultPanels({ result, history, gazeDrowsy = false }: Pr
     { key: 'gaze', label: '视线', active: (result?.gaze_drowsy ?? false) || gazeDrowsy },
   ];
 
+  const score = assessment?.score ?? null;
+  const level = assessment?.level ?? 'none';
+
+  // 时间线默认折叠，只展示最近几条；超过阈值时提供展开/收起。
+  const [timelineExpanded, setTimelineExpanded] = useState(false);
+  const visibleEvents = timelineExpanded ? events : events.slice(0, 5);
+
   return (
     <>
       <article className="panel verdict-panel">
@@ -51,6 +77,20 @@ export default function ResultPanels({ result, history, gazeDrowsy = false }: Pr
           <div>
             <strong>{isFatigued ? '疑似疲劳驾驶' : '状态正常'}</strong>
             <p>{result ? (isFatigued ? '检测到疲劳信号，请及时休息。' : '未检测到明显疲劳信号。') : '开启识别后显示判定结果'}</p>
+          </div>
+        </div>
+        <div className="verdict-metrics">
+          <div className="vmetric">
+            <span>疲劳评分</span>
+            <b className={`score-${scoreTier(score)}`}>{score ?? '—'}</b>
+          </div>
+          <div className="vmetric">
+            <span>疲劳分级</span>
+            <b className={`level-${level}`}>{LEVEL_LABEL[level]}</b>
+          </div>
+          <div className="vmetric">
+            <span>连续驾驶</span>
+            <b>{formatDuration(driveSeconds)}</b>
           </div>
         </div>
         <div className="verdict-signals">
@@ -130,6 +170,34 @@ export default function ResultPanels({ result, history, gazeDrowsy = false }: Pr
       <FatiguePanel status={result} />
 
       <AttentionPanel result={result} />
+
+      <article className="panel timeline-panel">
+        <div className="panel-heading">
+          <div><h2>事件时间线</h2></div>
+          <div className="timeline-actions">
+            <span className="model-tag">{events.length > 0 ? `${events.length} 条记录` : '空'}</span>
+            {events.length > 5 && (
+              <button type="button" className="timeline-toggle" aria-expanded={timelineExpanded}
+                onClick={() => setTimelineExpanded((value) => !value)}>
+                {timelineExpanded ? '收起' : `展开全部（${events.length}）`}
+              </button>
+            )}
+          </div>
+        </div>
+        {events.length === 0 ? (
+          <p className="timeline-empty">暂无事件。开始识别后，疲劳与分心提醒会按时间记录在这里。</p>
+        ) : (
+          <ol className="timeline">
+            {visibleEvents.map((event) => (
+              <li key={event.id} className={`timeline-item kind-${event.kind}`}>
+                <span className="timeline-time">{event.time}</span>
+                <span className="timeline-dot" aria-hidden="true" />
+                <span className="timeline-label">{event.label}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </article>
     </>
   );
 }

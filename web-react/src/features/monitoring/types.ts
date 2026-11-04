@@ -77,3 +77,37 @@ export interface ChartPoint {
   ear: number | null;
   threshold: number | null;
 }
+
+/* —— 驾驶辅助（真实驾驶场景）相关类型 —— */
+
+/** 疲劳分级：无 / 轻度 / 中度 / 重度，用于 HUD 颜色与告警强弱。 */
+export type FatigueLevel = 'none' | 'mild' | 'moderate' | 'severe';
+
+/** 灵敏度档位：宽松 / 标准 / 严格，映射到前端告警阈值。 */
+export type Sensitivity = 'calm' | 'standard' | 'strict';
+
+/** 一次驾驶事件（疲劳等级跃迁、走神等），记录到时间线。 */
+export interface DriverEvent {
+  id: number;
+  /** HH:mm:ss 形式的时刻，来自前端时钟。 */
+  time: string;
+  kind: 'mild' | 'moderate' | 'severe' | 'distract' | 'info';
+  label: string;
+}
+
+/** 综合疲劳评估：0~100 评分 + 分级 + 触发信号。 */
+export interface FatigueAssessment {
+  score: number;
+  level: FatigueLevel;
+  activeSignals: string[];
+  emotionScore: number;
+}
+
+/** 一次行程结束后的总结报告。 */
+export interface TripSummary {
+  startedAt: string;
+  endedAt: string;
+  durationSeconds: number;
+  fatigueEventCount: number;
+  maxLevel: FatigueLevel;
+}

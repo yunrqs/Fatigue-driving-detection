@@ -131,6 +131,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outl
 .gaze-switch[aria-checked="true"] .switch-track { background: var(--cyan); }
 .gaze-switch[aria-checked="true"] .switch-track::after { transform: translateX(14px); }
 .switch-status { color: var(--muted); font-size: 11px; }
+.option-switch { width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 8px; margin-bottom: 4px; color: var(--text); background: #0b1e2d; border: 1px solid #2a495f; border-radius: 9px; font-size: 13px; cursor: pointer; }
+.option-switch[aria-checked="true"] .switch-track { background: var(--cyan); }
+.option-switch[aria-checked="true"] .switch-track::after { transform: translateX(14px); }
+.view-switcher { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; padding-left: 8px; border-left: 2px solid #2a495f; }
 .point-toggle { display: flex; align-items: center; gap: 10px; padding: 7px 4px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .point-toggle input { width: 18px; height: 18px; accent-color: var(--cyan); margin: 0; }
 .privacy-note {
@@ -354,6 +358,8 @@ h1 { margin: 0; font-size: clamp(25px, 2.5vw, 36px); font-weight: 700; letter-sp
 .sidebar-collapsed .group-content { padding: 0 5px 6px; }
 .sidebar-collapsed .side-button { padding: 10px 0; justify-content: center; }
 .sidebar-collapsed .gaze-switch { justify-content: center; padding: 10px 0; }
+.sidebar-collapsed .option-switch { justify-content: center; padding: 10px 0; }
+.sidebar-collapsed .view-switcher { padding-left: 0; border-left: 0; }
 .sidebar-collapsed .point-toggle, .sidebar-collapsed .privacy-note { justify-content: center; }
 @media (max-height: 850px) {
   .sidebar { padding-top: 16px; gap: 12px; }
@@ -425,48 +431,26 @@ h1 { margin: 0; font-size: clamp(25px, 2.5vw, 36px); font-weight: 700; letter-sp
 
 /* 10. 视图切换：摄像头页只显示实时画面与侧栏控制，数据页只显示结果面板。
    视频元素始终挂载（display:none 不暂停播放），切换页面不中断采集与分析。 */
-.view-tabs {
-  display: flex;
-  gap: 6px;
-  padding: 5px;
-  border: 1px solid var(--line);
-  border-radius: 99px;
-  background: rgba(12, 32, 48, .55);
-}
-.view-tabs button {
-  padding: 9px 18px;
-  border: 0;
-  border-radius: 99px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 13px;
-  cursor: pointer;
-}
-.view-tabs button:hover { color: var(--text); }
-.view-tabs button.active {
-  color: #053332;
-  background: linear-gradient(110deg, #42e8d1, #48d8dc);
-  font-weight: 700;
-}
 /* 摄像头视图（默认）：隐藏结果面板，只显示摄像头面板。 */
 .dashboard .verdict-panel,
 .dashboard .state-panel,
 .dashboard .blink-panel,
 .dashboard .gaze-panel,
-.dashboard .fatigue-panel { display: none; }
-/* 数据视图：隐藏摄像头面板和侧边栏，显示结果面板（疲劳判定在最上方整行）。 */
-.view-data .sidebar { display: none; }
-.view-data { grid-template-columns: minmax(0, 1fr); }
-.view-data .dashboard { grid-template-areas: "verdict verdict" "fatigue emotion" "blink gaze" "attention attention"; }
+.dashboard .fatigue-panel,
+.dashboard .attention-panel,
+.dashboard .timeline-panel { display: none; }
+/* 数据视图：隐藏摄像头面板，显示结果面板（疲劳判定在最上方整行）。侧边栏保留，供切换回摄像头。 */
+.view-data .dashboard { grid-template-areas: "verdict verdict" "fatigue emotion" "blink gaze" "attention attention" "timeline timeline"; }
 .view-data .camera-panel { display: none; }
 .view-data .verdict-panel,
 .view-data .blink-panel,
 .view-data .gaze-panel,
 .view-data .fatigue-panel,
-.view-data .attention-panel { display: block; }
+.view-data .attention-panel,
+.view-data .timeline-panel { display: block; }
 .view-data .state-panel { display: flex; }
 @media (max-width: 1000px) {
-  .view-data .dashboard { grid-template-areas: "verdict" "fatigue" "emotion" "blink" "gaze" "attention"; }
+  .view-data .dashboard { grid-template-areas: "verdict" "fatigue" "emotion" "blink" "gaze" "attention" "timeline"; }
 }
 
 /* 11. 疲劳判定：多信号融合的最终结果展示 */
@@ -506,3 +490,168 @@ h1 { margin: 0; font-size: clamp(25px, 2.5vw, 36px); font-weight: 700; letter-sp
   background: rgba(18, 42, 60, .45);
 }
 .signal-chip.active { color: var(--amber); border-color: #a8723a; background: rgba(255, 189, 104, .12); }
+
+/* 12. 摄像头页驾驶 HUD：为真实驾驶场景设计的一眼反馈，叠加在视频画面底部。
+   颜色分三级：青=正常、琥珀=需注意、红=危险；danger 带脉冲呼吸光引起注意。 */
+.driver-hud {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(5, 14, 24, .72);
+  backdrop-filter: blur(7px);
+  pointer-events: none;
+}
+.hud-dot {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 14px currentColor;
+}
+.driver-hud.is-safe { color: var(--cyan); border-color: #32897f; }
+.driver-hud.is-caution { color: var(--amber); border-color: #a8723a; }
+.driver-hud.is-danger { color: var(--danger); border-color: #c24b5c; background: rgba(120, 26, 40, .78); }
+.driver-hud.is-idle { color: #9fb0c6; border-color: #345168; }
+.hud-main { flex: 1; min-width: 0; }
+.hud-main strong { font-size: 20px; font-weight: 800; }
+.hud-main p { margin: 3px 0 0; color: var(--text); font-size: 13px; opacity: .92; }
+.hud-reasons { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.hud-reasons span {
+  padding: 5px 11px;
+  border: 1px solid currentColor;
+  border-radius: 99px;
+  font-size: 12px;
+  opacity: .92;
+}
+.driver-hud.is-danger { animation: hud-pulse 1.2s ease-in-out infinite; }
+@keyframes hud-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 129, 145, .35); }
+  50% { box-shadow: 0 0 0 9px rgba(255, 129, 145, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .driver-hud.is-danger { animation: none; }
+}
+
+/* 13. 疲劳评分与事件时间线（数据页） */
+.verdict-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.vmetric {
+  padding: 12px 14px;
+  border: 1px solid #29495e;
+  border-radius: 12px;
+  background: rgba(12, 30, 46, .5);
+}
+.vmetric span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .04em; }
+.vmetric b { display: block; margin-top: 6px; font-size: 20px; font-weight: 800; }
+.vmetric b.score-low, .vmetric b.level-none { color: var(--cyan); }
+.vmetric b.score-mid, .vmetric b.level-mild, .vmetric b.level-moderate { color: var(--amber); }
+.vmetric b.score-high, .vmetric b.level-severe { color: var(--danger); }
+.timeline-panel { grid-area: timeline; }
+.timeline-actions { display: flex; align-items: center; gap: 10px; }
+.timeline-toggle {
+  padding: 5px 12px;
+  border: 1px solid #29495e;
+  border-radius: 99px;
+  color: var(--cyan);
+  font-size: 12px;
+  background: rgba(12, 30, 46, .5);
+  cursor: pointer;
+}
+.timeline-toggle:hover { border-color: #32897f; }
+.timeline-empty { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.timeline { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; }
+.timeline-item {
+  display: grid;
+  grid-template-columns: 70px 12px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 0;
+  border-top: 1px solid #233e52;
+}
+.timeline-item:first-child { border-top: 0; }
+.timeline-time { font-family: Consolas, monospace; color: var(--muted); font-size: 12px; }
+.timeline-dot { width: 9px; height: 9px; border-radius: 50%; background: #42e8d1; }
+.timeline-item.kind-mild .timeline-dot { background: var(--amber); box-shadow: 0 0 8px rgba(255, 189, 104, .6); }
+.timeline-item.kind-moderate .timeline-dot { background: #ff9a4d; box-shadow: 0 0 8px rgba(255, 154, 77, .6); }
+.timeline-item.kind-severe .timeline-dot { background: var(--danger); box-shadow: 0 0 8px rgba(255, 129, 145, .7); }
+.timeline-item.kind-distract .timeline-dot { background: var(--cyan); box-shadow: 0 0 8px rgba(66, 232, 209, .6); }
+.timeline-label { color: var(--text); font-size: 13px; }
+
+/* 14. HUD 内的评分与连续时长 */
+.hud-stats { display: flex; gap: 18px; align-items: center; flex-shrink: 0; }
+.hud-score, .hud-time { text-align: right; }
+.hud-score span, .hud-time span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .04em; }
+.hud-score b, .hud-time b { display: block; margin-top: 2px; font-size: 15px; }
+.hud-score b { color: currentColor; }
+.hud-time b { color: var(--text); }
+
+/* 15. 侧栏灵敏度与夜间模式 */
+.sensitivity-row { display: flex; align-items: center; gap: 6px; margin: 10px 0; }
+.sensitivity-label { color: var(--muted); font-size: 12px; margin-right: 4px; }
+.sensitivity-btn {
+  flex: 1;
+  padding: 7px 0;
+  border: 1px solid #29495e;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  background: rgba(12, 30, 46, .5);
+  cursor: pointer;
+}
+.sensitivity-btn:hover { color: var(--text); }
+.sensitivity-btn.active { color: #053332; background: linear-gradient(110deg, #42e8d1, #48d8dc); border-color: transparent; font-weight: 700; }
+
+/* 夜间模式：压低整体亮度与对比度，减少驾驶时屏幕眩光 */
+.night-mode { filter: brightness(.72) saturate(.82); }
+.night-mode .panel, .night-mode .sidebar { background: rgba(6, 12, 20, .7); }
+
+/* 16. 行程总结弹窗 */
+.trip-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 10, 18, .6);
+  backdrop-filter: blur(4px);
+}
+.trip-modal {
+  width: min(460px, 100%);
+  padding: 24px;
+  border: 1px solid #28495f;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #0d2132, #0a1a29);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .45);
+}
+.trip-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.trip-modal-head h2 { margin: 0; font-size: 20px; }
+.trip-modal-head p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.trip-close { border: 0; background: none; color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer; }
+.trip-close:hover { color: var(--text); }
+.trip-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 20px 0; }
+.trip-kpi { padding: 14px; border: 1px solid #29495e; border-radius: 12px; background: rgba(12, 30, 46, .5); }
+.trip-kpi span { display: block; color: var(--muted); font-size: 12px; }
+.trip-kpi b { display: block; margin-top: 6px; font-size: 18px; }
+.trip-modal-foot { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.trip-confirm {
+  width: 100%;
+  padding: 11px;
+  border: 0;
+  border-radius: 10px;
+  color: #053332;
+  font-weight: 700;
+  background: linear-gradient(110deg, #42e8d1, #48d8dc);
+  cursor: pointer;
+}
+@media (max-width: 640px) {
+  .verdict-metrics { grid-template-columns: 1fr 1fr; }
+}
